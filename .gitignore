@@ -1,0 +1,9 @@
+# .gitignore
+.venv/
+fases/
+
+__pycache__/
+*.pyc
+
+.env
+credentials.json

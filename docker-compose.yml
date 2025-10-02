@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # nome do serviço de BD
+  db:
+    # postgresql, versão 15
+    image: postgres:15
+
+    # nome do container para facilitar a identificação
+    container_name: wandinha_postgres_db
+
+    # carrega as variaveis de ambiente do arquivo .env
+    env_file:
+      - .env
+
+    # mapeia a porta 5432 do container para a 5432 da maquina
+    ports:
+      - "5432:5432"
+
+    # define um volume para persistir os dados
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    # garante que o container reinicie se falhar
+    restart: always
+
+volumes:
+  # declara o volume que será gerenciado pelo docker. 
+  # ele sobrevive mesmo que o container seja apagado
+  postgres_data:
