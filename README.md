@@ -2,13 +2,13 @@
 
 Este projeto tem como objetivo criar um bot de WhatsApp multifuncional chamado "Wandinha", que atua como uma secretária pessoal. O bot será capaz de interagir com APIs do Google (Calendar e Sheets) e utilizará a API Gemini do Google para processamento de linguagem natural e inteligência artificial.
 
-O backend é construído em Python usando o framework FastAPI.
+O backend é construído em Python usando o framework FastAPI, e a conexão com o WhatsApp é feita através de uma instância auto-hospedada da Evolution API.
 
 ---
 
 ## Fase 0: Configuração do Ambiente e Infraestrutura
 
-Esta fase documenta todos os passos necessários para preparar o ambiente de desenvolvimento local e os serviços em nuvem antes do início da codificação.
+Esta fase documenta todos os passos necessários para preparar o ambiente de desenvolvimento local e os serviços em nuvem antes do início da codificação. A arquitetura final utiliza um ambiente multi-contêiner totalmente gerenciado com Docker Compose.
 
 ### ✅ 1. Ambiente de Desenvolvimento Local
 
@@ -19,13 +19,26 @@ Esta fase documenta todos os passos necessários para preparar o ambiente de des
   - VS Code como editor de código principal.
   - DBeaver como cliente de banco de dados para PostgreSQL.
 
-### ✅ 2. Banco de Dados com Docker
+### ✅ 2. Infraestrutura de Serviços com Docker Compose
 
-- Foi criado um arquivo `docker-compose.yml` para definir o serviço do banco de dados.
-- **Serviço:** PostgreSQL, utilizando a imagem oficial `postgres:15`.
-- **Configuração:** As credenciais do banco (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`) são gerenciadas através de um arquivo `.env` para segurança.
-- **Persistência de Dados:** Foi configurado um volume Docker (`postgres_data`) para garantir que os dados não sejam perdidos ao reiniciar o contêiner.
-- **Acesso:** A porta `5432` do contêiner foi mapeada para a porta `5432` do host local, permitindo a conexão via DBeaver.
+Toda a infraestrutura de backend (banco de dados, cache e a própria API do WhatsApp) é orquestrada por um único arquivo `docker-compose.yml`. Isso garante um ambiente de desenvolvimento consistente, portátil e isolado.
+
+O ambiente é composto por três serviços principais:
+
+- **`db` (PostgreSQL):**
+  - **Imagem:** `postgres:15`.
+  - **Função:** Banco de dados relacional para armazenamento persistente dos dados da aplicação.
+  - **Configuração:** Gerenciada por variáveis no arquivo `.env` e utiliza um volume (`postgres_data`) para persistência dos dados. A porta `5432` é exposta para permitir a conexão via DBeaver.
+
+- **`redis` (Redis Cache):**
+  - **Imagem:** `redis:7-alpine`.
+  - **Função:** Servidor de cache em memória. Foi adicionado para garantir a estabilidade e a performance da Evolution API, que o utiliza para gerenciar sessões e dados temporários.
+  - **Configuração:** Utiliza um volume (`redis_data`) para persistência e um `healthcheck` para garantir que o serviço esteja saudável antes que outros serviços dependentes iniciem.
+
+- **`evolution_api` (API do WhatsApp):**
+  - **Imagem:** `atendai/evolution-api:v1.8.0`.
+  - **Função:** O coração da nossa conexão com o WhatsApp. É uma API não-oficial que se conecta ao WhatsApp via QR Code.
+  - **Configuração:** Foi configurada para se conectar aos serviços `db` e `redis` através da rede interna do Docker. O `depends_on` com `healthcheck` garante a ordem de inicialização correta, prevenindo erros de "condição de corrida". A porta `8080` é exposta para acessarmos sua interface web e documentação.
 
 ### ✅ 3. Configuração do Google Cloud Platform (GCP)
 
@@ -34,51 +47,23 @@ Esta fase documenta todos os passos necessários para preparar o ambiente de des
   - **Google Calendar API**
   - **Google Sheets API**
   - **Vertex AI API** (para acesso ao modelo Gemini)
-- Foram geradas e salvas as seguintes credenciais:
-  - **Credenciais de OAuth 2.0 (Client ID):** Salvas como `credentials.json` para acesso ao Calendar e Sheets.
-  - **Chave de API (API Key):** Adicionada ao arquivo `.env` para autenticação com a API do Gemini.
+- Foram geradas e salvas duas credenciais distintas para diferentes finalidades:
 
-### ✅ 4. Configuração da Plataforma Meta for Developers (WhatsApp)
+  - #### **`credentials.json` (ID do Cliente OAuth 2.0)**
+    - **Função:** Esta credencial é usada para ações que o bot executa **em nome do usuário**. Pense nela como uma "autorização para um chofer". Para que o bot possa, por exemplo, adicionar um evento na *sua* agenda (Google Calendar) ou ler uma linha da *sua* planilha (Google Sheets), ele precisa da *sua permissão*. Este arquivo gerencia o fluxo de autorização onde você concede essa permissão ao aplicativo.
+    - **Uso:** O arquivo `credentials.json` deve ser mantido na raiz do projeto.
 
-- Um novo aplicativo do tipo "Negócios" foi criado no painel da Meta.
-- O produto "WhatsApp" foi adicionado e configurado no aplicativo.
-- Os seguintes valores essenciais foram obtidos e adicionados ao arquivo `.env`:
-  - **Token de Acesso Temporário**
-  - **ID do Número de Telefone de Teste**
-  - **ID da Conta do WhatsApp Business**
+  - #### **Chave de API (`GEMINI_API_KEY`) para Vertex AI**
+    - **Função:** Esta chave é usada para acesso direto do servidor a uma API pública que não manipula dados privados de um usuário específico. Pense nela como a "chave de um carro de controle remoto". Ela simplesmente autentica nosso programa (o bot) como um usuário válido da API de IA (Gemini), sem precisar da sua permissão a cada pergunta.
+    - **Uso:** A chave é armazenada de forma segura no arquivo `.env` (ex: `GEMINI_API_KEY="..."`) e foi restringida no painel do GCP para funcionar exclusivamente com a **Vertex AI API**, aumentando a segurança.
 
-Com a conclusão da Fase 0, a fundação do projeto está sólida e pronta para o início do desenvolvimento do backend na Fase 1.
+### ✅ 4. Conexão da Evolution API
 
+- **Aviso de Segurança:** Foi utilizado um **número de telefone de teste/descartável** para a conexão, pois o uso de APIs não-oficiais viola os termos de serviço do WhatsApp e acarreta risco de banimento.
+- **Processo:**
+  1. Acessamos a interface web da API em `http://localhost:8080`.
+  2. Criamos uma nova instância, selecionando o canal `Baileys`.
+  3. Escaneamos o QR Code gerado usando o aplicativo do WhatsApp no celular de teste (em `Aparelhos Conectados`).
+  4. Verificamos a mudança de status da instância para **"Connected"**.
 
----
-
-## Fase 1: Conexão Inicial e Webhook com FastAPI
-
-Esta fase foca em criar o esqueleto da aplicação com FastAPI e estabelecer a comunicação bidirecional com a API de Nuvem do WhatsApp, culminando em um bot que pode receber uma mensagem e ecoar uma resposta.
-
-### ✅ 1. Estrutura do Projeto e Servidor Web
-
-- **Ambiente Virtual:** Foi configurado um ambiente virtual Python (`venv`) para isolar as dependências do projeto.
-- **Bibliotecas Instaladas:** As dependências iniciais foram instaladas via `uv`, incluindo `fastapi`, `uvicorn`, `python-dotenv` e `requests`.
-- **Servidor Básico:** Criado o arquivo `main.py` com uma instância do FastAPI, servido localmente com Uvicorn.
-
-### ✅ 2. Implementação do Webhook do WhatsApp
-
-- **Endpoint de Verificação (GET):** Foi implementada a rota `GET /webhook` para que a plataforma da Meta pudesse verificar a autenticidade do endpoint. A lógica lida com os parâmetros `hub.mode`, `hub.verify_token` e `hub.challenge`.
-- **Endpoint de Recebimento (POST):** Foi implementada a rota `POST /webhook` para receber e processar as notificações de mensagens enviadas pelo WhatsApp. A função foi configurada para extrair e exibir o payload JSON completo para fins de depuração.
-
-### ✅ 3. Expondo o Servidor Local com Ngrok
-
-- **Túnel Seguro:** A ferramenta `ngrok` foi instalada e utilizada para expor a porta local (`8000`) do servidor FastAPI para a internet através de uma URL pública `https`. Comando 'ngronk http <porta>'
-- **Configuração na Meta:** A URL gerada pelo `ngrok` foi configurada como a "URL de callback" no painel do aplicativo da Meta.
-
-### ✅ 4. Lógica de Resposta (Eco)
-
-- **Análise do Payload:** O código do endpoint `POST /webhook` foi expandido para navegar na estrutura do JSON recebido, extraindo com segurança o número de telefone do remetente e o texto da mensagem.
-- **Função de Envio:** Foi criada a função `send_whatsapp_message` para montar e enviar a mensagem de resposta.
-- **Integração com a API Graph:** A função de envio utiliza a biblioteca `requests` para fazer uma requisição `POST` para a API Graph da Meta, incluindo o Token de Acesso para autenticação e o payload da mensagem formatado em JSON.
-
-### ⚠️ 5. Status da Fase e Debugging
-
-- Ao final da fase, a aplicação estava **recebendo mensagens com sucesso**, validando toda a configuração do webhook.
-- O envio da resposta foi bloqueado por uma restrição da conta Meta (`"Business account is restricted from messaging users in this country."`). O código de envio está funcional e a resolução depende da conclusão da "Verificação da Empresa" no Gerenciador de Negócios da Meta, que está em andamento.
+Com a conclusão da Fase 0, a fundação do projeto está sólida e pronta para o início do desenvolvimento do backend em Python na Fase 1.

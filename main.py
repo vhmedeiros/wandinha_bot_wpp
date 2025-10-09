@@ -5,104 +5,91 @@ import uvicorn
 import requests
 from fastapi import FastAPI, Request, Response, HTTPException
 from dotenv import load_dotenv
+from ai_processor import get_gemini_response
+
 
 # carrega as variaveis de ambiente
 load_dotenv()
 
 app = FastAPI()
 
-# acessa as variaveis de ambiente
-VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
-ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
-PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+# Obtém as configurações da Evolution API do arquivo .env
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
+EVOLUTION_API_KEY = os.getenv("AUTHENTICATION_API_KEY")
 
 @app.get("/") # requisição do tipo GET na raiz print que o BOT ta rodando
 def read_root():
     return {"Status": "Wandinha Bot is running."}
-
-# Endpoint para a verificação do webhook (GET)
-@app.get("/webhook")
-# esse Request é a injeção de dependencia do FastAPI. Ele da o obj da requisição. É como o request do DJANGO
-def webhook_verify(request: Request):
-    """
-    Esta def é chamada pelo wpp para verificar o endpoint do webhook.
-    Ela espera um challenge e retorna-o para confirmar a autenticidade
-    """
-
-    # extrai os parametros da query
-    mode = request.query_params.get("hub.mode") # extrai o valor do hub.mode da URL
-    token = request.query_params.get("hub.verify_token")
-    challenge = request.query_params.get("hub.challenge")
-
-    # verifica se o modo e o token estão presentes e corretos
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("WEBHOOK_VERIFIED")
-        # responde com o challenge para completar a verificaçaõ
-        return Response(content=challenge, status_code=200, media_type="text/plain")
-    else:
-        # se a verificação falhar, retorna um erro
-        print("WEBHOOK_VERIFICATION_FAILED")
-        raise HTTPException(status_code=403, detail="Verification failed")
     
 # endpoint para receber msgs do wpp (POST)
 @app.post("/webhook")
 async def webhook_post(request: Request):
     """
-    Esta def recebe os dados das msgs enviadas ao seu numero de wpp
+    Esse webhook recebe todas as notificações da Evolution API
     """
+    data = await request.json()
 
-    # extrai o corpo da requisição
-    body = await request.body() # como da def é async, usamos await para esperar a leitura completa do body
-    data = json.loads(body)
-
-    # print o body da requisição no terminal para depuração
-    print("Received WhatsApp message: ")
+    print("--- Webhook recebido da Evolution API ---")
     print(json.dumps(data, indent=2))
+    print("-----------------------------------------")
 
-    # logica de resposta
-    # verifica se a notifica é de uma msg
-    if "entry" in data and data["entry"]:
-        entry = data["entry"][0]
+    # processando eventos de novas mensagens de texto
+    if data.get("event") == "messages.upsert" and data.get("data"):
+        message_data = data["data"]
 
-        if "changes" in entry and entry["changes"]:
-            change = entry["changes"][0]
+        # garante que a mensagem não é do proprio bot
+        if message_data.get("key", {}).get("fromMe", True):
+            print("Mensagem ignorada (enviada pelo próprio bot).")
+            return {"status": "ok", "message": "Ignored own message"}
+        
+        # pega a primeira mensagem da lista
+        message = message_data.get("message", {})
 
-            if "value" in change and "messages" in change["value"]:
-                message_info = change["value"]["messages"][0]
+        # verifica se é uma mensagem de texto simples (conversation)
+        if "conversation" in message:
+            sender_number = message_data["key"]["remoteJid"]
+            message_text = message["conversation"]
 
-                # extrai o numero do remetente e o texto da mensagem
-                from_number = message_info["from"]
-                message_text = message_info["text"]["body"]
+            print(f"Mensagem de texto recebida de {sender_number}: '{message_text}")
 
-                print(f"Message from {from_number}: {message_text}")
+            # obtem a resposta do gemini
+            gemini_response = get_gemini_response(message_text)
 
-                # envia uma resposta de eco
-                send_whatsapp_message(from_number, f"Recebido: {message_text}")
+            # envia a resposta de volta ao user via Evolution API
+            send_evolution_message(sender_number, gemini_response)
 
     # o wpp espera uma resposta 200 OK para confirmar recebimento
     return {"status": "ok"}
 
-def send_whatsapp_message(to_number, message):
+def send_evolution_message(to_number, message):
     """
-    def para enviar uma mensagem de texto via API do wpp
+    def para enviar uma mensagem de texto usando a instancia local da Evolution API
     """
-    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+    # A URL para enviar msg de texto da Evolution API
+    api_url = f"{EVOLUTION_API_URL}/message/sendText/wandinha"
+    
     headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "apikey": EVOLUTION_API_KEY,
         "Content-Type": "application/json",
     }
+    
     payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": message},
+        "number": to_number,
+        "options": {
+            "delay": 1200,
+            "presence": "composing"
+        },
+        "textMessage": {
+            "text": message
+        },
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(api_url, headers=headers, json=payload)
         response.raise_for_status()
-        print("Message sent successfully!")
+        print("Message sent successfully for Evolution API!")
         print(response.json())
+
     except requests.exceptions.RequestException as e:
         print(f"Erro sending message: {e}")
 

@@ -1,30 +1,67 @@
-version: '3.8'
-
 services:
   # nome do serviço de BD
   db:
     # postgresql, versão 15
     image: postgres:15
-
     # nome do container para facilitar a identificação
     container_name: wandinha_postgres_db
-
     # carrega as variaveis de ambiente do arquivo .env
     env_file:
       - .env
-
     # mapeia a porta 5432 do container para a 5432 da maquina
     ports:
       - "5432:5432"
-
     # define um volume para persistir os dados
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     # garante que o container reinicie se falhar
     restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: wandinha_redis_cache
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Serviço da API do WPP (evolution)
+  evolution_api:
+    image: atendai/evolution-api:v1.8.0
+    container_name: wandinha_evolution_api
+    restart: always
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # - WEBHOOK_GLOBAL_URL=http://172.17.0.1:8000/webhook
+      - WEBHOOK_GLOBAL_URL=http://host.docker.internal:8000/webhook
+      - WEBHOOK_GLOBAL_EVENTS=messages.upsert
+      - DATABASE_CONNECTION_URI=${POSTGRES_CONNECTION_URI}
+      - CACHE_ENABLED=true
+      - CACHE_PROVIDER=redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "8080:8080"
+    volumes:
+      - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_healthy
 
 volumes:
   # declara o volume que será gerenciado pelo docker. 
   # ele sobrevive mesmo que o container seja apagado
   postgres_data:
+  redis_data:
+  evolution_store:
+  evolution_instances:
