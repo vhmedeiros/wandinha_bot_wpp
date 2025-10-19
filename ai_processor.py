@@ -13,6 +13,8 @@ LOCATION = "us-east1"
 # inicializa o SDK da Vertex AI uma unica vez
 vertexai.init(project=PROJECT_ID, location=LOCATION)
 
+
+
 def get_gemini_response(prompt_text: str) -> str:
     """
     Envia um prompt para o model gemini e retorna a resposta em texto

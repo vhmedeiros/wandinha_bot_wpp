@@ -16,9 +16,7 @@ Esta fase documenta todos os passos necessários para preparar o ambiente de des
 - **Linguagem:** Instalado Python 3.10, `python3-pip` e `python3.10-venv`.
 - **Containerização:** Instalado Docker e Docker Compose para gerenciamento de serviços.
 - **Ferramentas:**
-  - VS Code como editor de código principal.
-  - DBeaver como cliente de banco de dados para PostgreSQL.
-
+  - VS Code como editor de código, visualizador de Banco de Dados e dos Containers.
 ### ✅ 2. Infraestrutura de Serviços com Docker Compose
 
 Toda a infraestrutura de backend (banco de dados, cache e a própria API do WhatsApp) é orquestrada por um único arquivo `docker-compose.yml`. Isso garante um ambiente de desenvolvimento consistente, portátil e isolado.

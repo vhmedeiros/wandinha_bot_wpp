@@ -14,7 +14,7 @@ load_dotenv()
 app = FastAPI()
 
 # Obtém as configurações da Evolution API do arquivo .env
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://evolution_api:8080")
 EVOLUTION_API_KEY = os.getenv("AUTHENTICATION_API_KEY")
 
 @app.get("/") # requisição do tipo GET na raiz print que o BOT ta rodando
@@ -26,36 +26,67 @@ def read_root():
 async def webhook_post(request: Request):
     """
     Esse webhook recebe todas as notificações da Evolution API
+    Compatível com payloads 'messages.upsert' que venham como objeto ou lista
     """
     data = await request.json()
 
     print("--- Webhook recebido da Evolution API ---")
-    print(json.dumps(data, indent=2))
+    print(json.dumps(data, indent=2, ensure_ascii=False))
     print("-----------------------------------------")
 
-    # processando eventos de novas mensagens de texto
-    if data.get("event") == "messages.upsert" and data.get("data"):
-        message_data = data["data"]
+    event = data.get("event")
+    raw = data.get("data")
 
-        # garante que a mensagem não é do proprio bot
-        if message_data.get("key", {}).get("fromMe", True):
-            print("Mensagem ignorada (enviada pelo próprio bot).")
-            return {"status": "ok", "message": "Ignored own message"}
-        
-        # pega a primeira mensagem da lista
-        message = message_data.get("message", {})
+    # processando novas mensagens de texto
+    if event != "messages.upsert" or raw is None:
+        return {"status": "ignored", "reason": "not messages.upsert or empty data"}
 
-        # verifica se é uma mensagem de texto simples (conversation)
-        if "conversation" in message:
-            sender_number = message_data["key"]["remoteJid"]
-            message_text = message["conversation"]
+    #normaliza: 'raw' poder ser objeto UNICO ou LISTA de mensagens
+    messages = []
+    if isinstance(raw, dict) and ("message" in raw or "key" in raw):
+        messages = [raw]
+    elif isinstance(raw, list):
+        messages = raw
+    else:
+        # alguns conectores mandam em 'messages' em vez de 'data'
+        alt = data.get("messages")
+        if isinstance(alt, list):
+            messages = alt
 
-            print(f"Mensagem de texto recebida de {sender_number}: '{message_text}")
+    if not messages:
+        print("Nenhuma mensagem útil no payload.")
+        return {"status": "ignored", "reason": "no parsable messages"}
+    
+    for msg in messages:
+        key = msg.get("key", {})
+        from_me = key.get("fromMe", False) # não assuma true por default
+        if from_me:
+            print("Mensagem ignorada (enviada pelo proprio bot)")
+            continue
 
-            # obtem a resposta do gemini
-            gemini_response = get_gemini_response(message_text)
+        sender_number = key.get("remoteJid") or msg.get("chatId")
+        message_obj = msg.get("message", {})
 
-            # envia a resposta de volta ao user via Evolution API
+        # extrai texto de conversation OU extendedTextMessage
+        message_text = None
+        if isinstance(message_obj, dict):
+            if message_obj.get("conversation"):
+                message_text = message_obj["conversation"]
+            else:
+                etm = message_obj.get("extendedTextMessage") or {}
+                message_text = etm.get("text")
+
+        if not message_text:
+            print(f"Mensagem sem texto (talvez midia/audio). Sender: {sender_number}")
+            continue
+
+        print(f"Texto recebido de {sender_number}: {message_text!r}")
+
+        # chama Vertex - requer GOOGLE_APPLICATION_CREDENTIAL no container
+        gemini_response = get_gemini_response(message_text)
+
+        # envia resposta via Evolution
+        if sender_number and gemini_response:
             send_evolution_message(sender_number, gemini_response)
 
     # o wpp espera uma resposta 200 OK para confirmar recebimento
@@ -77,7 +108,7 @@ def send_evolution_message(to_number, message):
         "number": to_number,
         "options": {
             "delay": 1200,
-            "presence": "composing"
+            "presence": "composing",
         },
         "textMessage": {
             "text": message
