@@ -17,6 +17,7 @@ Esta fase documenta todos os passos necessários para preparar o ambiente de des
 - **Containerização:** Instalado Docker e Docker Compose para gerenciamento de serviços.
 - **Ferramentas:**
   - VS Code como editor de código, visualizador de Banco de Dados e dos Containers.
+
 ### ✅ 2. Infraestrutura de Serviços com Docker Compose
 
 Toda a infraestrutura de backend (banco de dados, cache e a própria API do WhatsApp) é orquestrada por um único arquivo `docker-compose.yml`. Isso garante um ambiente de desenvolvimento consistente, portátil e isolado.
@@ -65,3 +66,62 @@ O ambiente é composto por três serviços principais:
   4. Verificamos a mudança de status da instância para **"Connected"**.
 
 Com a conclusão da Fase 0, a fundação do projeto está sólida e pronta para o início do desenvolvimento do backend em Python na Fase 1.
+
+---
+
+## Fase 1: Containerização do Bot, Webhook e Integração com IA
+
+Nesta fase, o projeto ganhou vida. O objetivo foi criar o serviço do bot em Python, containerizá-lo com Docker, e estabelecer o fluxo completo de comunicação: receber uma mensagem do WhatsApp via Evolution API, processá-la com a IA da Vertex AI (Gemini) e enviar a resposta de volta ao usuário.
+
+### ✅ 1. Containerização do Bot (`wandinha-bot`)
+
+A arquitetura foi solidificada movendo o bot FastAPI para dentro do seu próprio contêiner Docker, gerenciado pelo `docker-compose.yml`.
+
+- **`Dockerfile`:** Foi criado um `Dockerfile` para construir a imagem do nosso bot.
+  - **Base:** Utiliza a imagem otimizada `python:3.12-slim`.
+  - **Dependências de Build:** Instala o pacote `build-essential` para permitir a compilação de bibliotecas Python que usam código C ou Rust.
+  - **Gerenciador de Pacotes:** Instala e utiliza o `uv` para uma instalação de dependências mais rápida a partir do `requirements.txt`.
+- **Serviço no Docker Compose:** O bot agora é o serviço `wandinha_bot`, garantindo que ele opere na mesma rede interna que os outros serviços (`db`, `redis`, `evolution_api`), simplificando a comunicação.
+
+### ✅ 2. Módulo de Processamento de IA (Vertex AI)
+
+A inteligência do bot foi implementada em um módulo dedicado.
+
+- **`ai_processor.py`:** Um novo arquivo foi criado para isolar toda a lógica de comunicação com a API da Vertex AI.
+- **Autenticação:** O método de autenticação foi corrigido. Em vez de uma Chave de API, agora utilizamos uma **Conta de Serviço (Service Account)**. O arquivo de credenciais (`service-account-key.json`) é passado para o contêiner `wandinha-bot` através da variável de ambiente `GOOGLE_APPLICATION_CREDENTIALS`, definida no `docker-compose.yml`.
+- **Função Principal:** A função `get_gemini_response()` recebe o texto da mensagem do usuário, envia para o modelo Gemini e retorna a resposta gerada pela IA.
+
+### ✅ 3. Implementação do Webhook e Lógica de Resposta
+
+O `main.py` foi adaptado para a nova arquitetura e para orquestrar o fluxo de mensagens.
+
+- **Recepção de Webhook:** A rota `POST /webhook` foi configurada para receber as notificações de mensagem (`messages.upsert`) enviadas pelo serviço `evolution_api`.
+- **Análise do Payload:** O código agora é capaz de analisar a estrutura JSON da Evolution API, extrair o número do remetente (`remoteJid`) e o texto da mensagem (seja de um `conversation` ou `extendedTextMessage`).
+- **Orquestração do Fluxo:** Ao receber uma mensagem, o `main.py` agora executa a seguinte sequência:
+  1. Extrai o texto da mensagem do usuário.
+  2. Chama a função `get_gemini_response()` do `ai_processor.py`.
+  3. Envia a resposta retornada pela IA de volta ao usuário através da função `send_evolution_message()`.
+- **Envio de Resposta:** A função de envio foi reescrita para fazer uma requisição `POST` para o serviço `evolution_api` na rede interna do Docker (`http://evolution_api:8080`), utilizando a `AUTHENTICATION_API_KEY` para autorização.
+
+### ⚠️ 4. Desafio e Solução: Comunicação Interna no Docker
+
+O principal desafio da Fase 1 foi garantir que a `evolution_api` conseguisse enviar os webhooks para o contêiner `wandinha_bot`. Após uma longa investigação, a causa raiz foi identificada:
+
+- **O Problema:** A Evolution API possui uma validação interna de URL de webhook que **não aceita underscores (`_`)** no nome do host, pois isso viola a especificação RFC para hostnames. Nosso serviço, inicialmente nomeado `wandinha_bot`, estava sendo rejeitado.
+- **A Solução:** Foi necessário renomear o serviço e o nome do contêiner para usar um hífen, tornando-o compatível com a validação.
+
+A configuração final e funcional no `docker-compose.yml` ficou assim:
+
+```yaml
+services:
+  wandinha-bot: # <-- Uso de hífen no nome do serviço
+    container_name: wandinha-bot # <-- Uso de hífen no nome do contêiner
+    build: .
+    # ... resto da configuração do serviço
+
+  evolution_api:
+    environment:
+      # Aponta para o nome do serviço corrigido
+      - WEBHOOK_GLOBAL_URL=http://wandinha-bot:8000/webhook
+      - WEBHOOK_GLOBAL_EVENTS=MESSAGES_UPSERT
+      # ...
