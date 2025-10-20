@@ -23,10 +23,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # NOSSO BOT AGORA É UM SERVIÇO DENTRO DO DOCKER
+  # NOSSO BOT (fastapi)
   wandinha_bot:
     container_name: wandinha-bot
     restart: always
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /app
     env_file:
       - .env
     environment:
@@ -37,6 +41,11 @@ services:
       - .:/app
     depends_on:
       - evolution_api
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --proxy-headers
 
   evolution_api:
     image: atendai/evolution-api:v1.8.0
